@@ -30,7 +30,7 @@ if mode == "Maize":
     try:
         reg_model = joblib.load('us_maize_yield_regressor.pkl')
         preprocessor = joblib.load('preprocessor.pkl')
-        historical_df = pd.read_csv('C:/Users/Osman Al-Hussein/Downloads/healthcare/processed_us_maize_data.csv')
+        historical_df = pd.read_csv('processed_us_maize_data.csv')
         st.success("Maize model and historical data loaded successfully.")
     except Exception as e:
         st.error(f"Error loading maize model or data: {e}")
@@ -195,4 +195,5 @@ with st.sidebar:
     st.write(f"**{mode} Model**: XGBoost Regressor and Classifier (if available) trained on {historical_df.shape[0]} samples.")
     st.write("**Features**: Year, rainfall/temp, area/colonies, and categorical vars (state/season for Honey, country/crop/season for Maize).")
     st.write(f"**Data Range**: 2000–2023 (Maize) or 1995–2021 (Honey).")
+
     st.write("**Charts**: Historical trends, comparisons, distribution, and feature importance.")
