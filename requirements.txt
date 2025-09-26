@@ -2,4 +2,5 @@ pandas==2.3.0
 numpy==2.1.3
 scikit-learn==1.7.0
 xgboost==3.0.5
+plotly
 joblib==1.5.1  
