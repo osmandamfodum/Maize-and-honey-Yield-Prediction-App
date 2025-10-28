@@ -3,197 +3,301 @@ import pandas as pd
 import numpy as np
 import joblib
 import plotly.express as px
+import tensorflow as tf
+from PIL import Image
+import os
+import json
+import logging
 
-# Custom CSS for modern UI
-st.markdown(
-    """
-    <style>
+# Suppress TensorFlow logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# Custom DepthwiseConv2D layer
+class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
+    def __init__(self, **kwargs):
+        kwargs.pop('groups', None)
+        super().__init__(**kwargs)
+
+tf.keras.utils.get_custom_objects()['DepthwiseConv2D'] = CustomDepthwiseConv2D
+
+# --- CONFIG ---
+st.set_page_config(page_title="AgriBee AI", layout="wide")
+
+# Custom CSS
+st.markdown("""
+<style>
     .stApp { background-color: white; color: black; }
     .image-container { background-color: white; padding: 10px; display: flex; justify-content: center; }
-    .stImage > img { max-width: 100%; height: auto; background-color: transparent; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+    .stImage > img { max-width: 100%; height: auto; }
+    .alert-success { background-color: #d4edda; color: #155724; padding: 10px; border-radius: 5px; border: 1px solid #c3e6cb; }
+    .alert-danger { background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; border: 1px solid #f5c6cb; }
+</style>
+""", unsafe_allow_html=True)
 
-# Display image at the top
+# Header Image
 st.markdown('<div class="image-container">', unsafe_allow_html=True)
-st.image("neu.jpg", width='stretch')
+st.image("neu.jpg", use_column_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Switch button using radio for mode selection
-mode = st.radio("Switch Prediction Mode", ["Maize", "Honey"], index=0, horizontal=True)
+# --- MODE SELECTION ---
+mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
 
-# Load models based on mode
-has_classification = False
-if mode == "Maize":
-    try:
-        reg_model = joblib.load('us_maize_yield_regressor.pkl')
-        preprocessor = joblib.load('preprocessor.pkl')
-        historical_df = pd.read_csv('processed_us_maize_data.csv')
-        st.success("Maize model and historical data loaded successfully.")
-    except Exception as e:
-        st.error(f"Error loading maize model or data: {e}")
+# --- BEE MODEL & METADATA (Only load once) ---
+@st.cache_resource
+def load_bee_model():
+    model_path = 'Final_bee_model.h5'
+    if not os.path.exists(model_path):
+        st.error("Bee model not found. Place 'Final_bee_model.h5' in the root directory.")
         st.stop()
-    try:
-        clf_model = joblib.load('us_maize_yield_classifier.pkl')
-        label_encoder = joblib.load('label_encoder.pkl')
-        expected_features = len(preprocessor.get_feature_names_out())
-        if hasattr(clf_model, 'n_features_in_') and clf_model.n_features_in_ == expected_features:
-            has_classification = True
-            st.success("Maize classification model loaded successfully.")
-        else:
-            st.warning("Maize classification model feature count mismatch. Skipping classification predictions.")
-    except Exception:
-        st.warning("Maize classification model not found. Skipping classification predictions.")
-elif mode == "Honey":
-    try:
-        reg_model = joblib.load('honey_yield_regressor2.pkl')
-        preprocessor = joblib.load('honey_preprocessor2.pkl')
-        clf_model = joblib.load('honey_yield_classifier2.pkl')
-        label_encoder = joblib.load('honey_label_encoder2.pkl')
-        historical_df = pd.read_csv('merged_honey_weather.csv')
-        has_classification = True
-        st.success("Honey model and historical data loaded successfully.")
-    except Exception as e:
-        st.error(f"Error loading honey model or data: {e}")
-        st.stop()
+    model = tf.keras.models.load_model(model_path)
+    return model
 
-st.title(f"{mode} Yield Prediction App")
-st.write(f"Enter the details below to predict {mode.lower()} yield and get a full report with charts.")
+BEE_METADATA = {
+    'class_names': [
+        'Varroa, Small Hive Beetles', 'ant problems', 'few varroa, hive beetles',
+        'healthy', 'hive being robbed', 'missing queen'
+    ],
+    'image_size': (224, 224)
+}
 
-# User inputs
-if mode == "Maize":
-    country = st.selectbox("Country", ["US"])
-    crop_type = st.selectbox("Crop Type", ["Maize"])
-    season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
-    year = st.number_input("Year", min_value=2000, max_value=2050, value=2025)
-    area = st.number_input("Area (ha)", min_value=0.0, value=100.0)
-    rainfall = st.number_input("Rainfall (mm)", min_value=0.0, value=500.0)
-    temp = st.number_input("Temperature (°C)", min_value=0.0, value=20.0)
-    tmin = st.number_input("Min Temperature (°C)", min_value=0.0, value=15.0)
-    tmax = st.number_input("Max Temperature (°C)", min_value=0.0, value=25.0)
-    rad = st.number_input("Solar Radiation (MJ/m²)", min_value=0.0, value=15.0)
-    et0 = st.number_input("Evapotranspiration (mm)", min_value=0.0, value=5.0)
-    cwb = st.number_input("Climatic Water Balance (mm)", min_value=-1000.0, value=0.0)
-elif mode == "Honey":
-    state = st.selectbox("State", historical_df['state'].unique())
-    season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
-    year = st.number_input("Year", min_value=1995, max_value=2021, value=2020)
-    colonies_number = st.number_input("Number of Colonies", min_value=0, value=50000)
-    avg_temp = st.number_input("Average Temperature (°C)", min_value=0.0, value=15.0)
-    total_rainfall = st.number_input("Total Rainfall (mm)", min_value=0.0, value=500.0)
+DIAGNOSIS_EXPLANATIONS = {
+    'Varroa, Small Hive Beetles': "Small red or brown spots detected, indicating Varroa Mites and Small Hive Beetles infestation.",
+    'ant problems': "Presence of ants detected, suggesting ant-related issues in the hive.",
+    'few varroa, hive beetles': "Low levels of Varroa Mites and Small Hive Beetles detected.",
+    'healthy': "No visible signs of disease; the hive appears healthy.",
+    'hive being robbed': "Signs of robbing behavior detected, such as increased aggression or dead bees.",
+    'missing queen': "Indications of a missing queen, such as lack of brood or queen cells."
+}
 
-if st.button("Predict Yield"):
-    # Create input DataFrame
+FALLBACK_RESPONSES = {
+    'Varroa, Small Hive Beetles': {
+        'treatment': "- Oxalic acid or amitraz treatment.\n- Monitor mite and beetle counts.\n- Rotate treatments.",
+        'management': "- Check pest levels monthly.\n- Use sticky boards."
+    },
+    'ant problems': {
+        'treatment': "- Use ant barriers or bait traps.\n- Reduce hive entrances.\n- Remove attractants.",
+        'management': "- Monitor ant activity weekly.\n- Keep hive area clean."
+    },
+    'few varroa, hive beetles': {
+        'treatment': "- Consider light treatment (e.g., thymol).\n- Use beetle traps.\n- Monitor levels.",
+        'management': "- Regular hive inspections.\n- Maintain hive hygiene."
+    },
+    'healthy': {
+        'care': "- Provide balanced nutrition.\n- Maintain clean hives.\n- Monitor queen health.",
+        'next steps': "- Regular hive inspections.\n- Ensure strong colony."
+    },
+    'hive being robbed': {
+        'management': "- Reduce hive entrances.\n- Move weaker hives.\n- Provide supplemental feeding.",
+        'treatment': "- Install robber screens.\n- Monitor for aggression."
+    },
+    'missing queen': {
+        'treatment': "- Introduce a new queen.\n- Check for queen cells.\n- Unite with a queenright colony.",
+        'management': "- Monitor brood patterns.\n- Ensure colony stability."
+    }
+}
+
+# --- MAIZE / HONEY MODE ---
+if mode in ["Maize", "Honey"]:
+    has_classification = False
+
     if mode == "Maize":
-        input_data = pd.DataFrame({
-            'country': [country], 'crop_type': [crop_type], 'season': [season],
-            'year': [year], 'area': [area], 'rainfall': [rainfall], 'temp': [temp],
-            'tmin': [tmin], 'tmax': [tmax], 'rad': [rad], 'et0': [et0], 'cwb': [cwb]
-        })
-    elif mode == "Honey":
-        input_data = pd.DataFrame({
-            'state': [state], 'season': [season], 'year': [year],
-            'colonies_number': [colonies_number], 'avg_temp': [avg_temp],
-            'total_rainfall': [total_rainfall]
-        })
-    
-    try:
-        # Preprocess input
-        input_preprocessed = preprocessor.transform(input_data)
-        
-        # Regression prediction
-        reg_prediction = reg_model.predict(input_preprocessed)[0]
-        st.success(f"**Predicted {mode} Yield**: {reg_prediction:.2f} {'t/ha' if mode == 'Maize' else 'lbs/colony'}")
-        if mode == "Maize":
-            total_yield = reg_prediction * area
-            st.success(f"**Total Crop Quantity**: {total_yield:.2f} tons")
-        elif mode == "Honey":
-            total_yield = reg_prediction * colonies_number / 1000  # Convert to tons
-            st.success(f"**Total Honey Production**: {total_yield:.2f} tons")
-        
-        # Classification prediction
-        if has_classification:
-            clf_prediction = clf_model.predict(input_preprocessed)[0]
-            clf_label = label_encoder.inverse_transform([clf_prediction])[0]
-            if clf_label == 'Low':
-                st.markdown(f'<div style="background-color: #ffcccc; padding: 10px; border-radius: 5px; border-left: 5px solid #ff4444; color: #cc0000;"><strong>Predicted Yield Category: **{clf_label}**</strong> (Unfavorable conditions)</div>', unsafe_allow_html=True)
-            elif clf_label == 'High':
-                st.markdown(f'<div style="background-color: #ccffcc; padding: 10px; border-radius: 5px; border-left: 5px solid #44ff44; color: #006600;"><strong>Predicted Yield Category: **{clf_label}**</strong> (Favorable conditions)</div>', unsafe_allow_html=True)
+        try:
+            reg_model = joblib.load('us_maize_yield_regressor.pkl')
+            preprocessor = joblib.load('preprocessor.pkl')
+            historical_df = pd.read_csv('processed_us_maize_data.csv')
+            st.success("Maize model and data loaded.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+            st.stop()
+
+        try:
+            clf_model = joblib.load('us_maize_yield_classifier.pkl')
+            label_encoder = joblib.load('label_encoder.pkl')
+            expected_features = len(preprocessor.get_feature_names_out())
+            if hasattr(clf_model, 'n_features_in_') and clf_model.n_features_in_ == expected_features:
+                has_classification = True
+                st.success("Maize classifier loaded.")
             else:
-                st.markdown(f'<div style="background-color: #fff3cd; padding: 10px; border-radius: 5px; border-left: 5px solid #ffc107; color: #856404;"><strong>Predicted Yield Category: **{clf_label}**</strong> (Moderate conditions)</div>', unsafe_allow_html=True)
-        else:
-            st.info("Classification predictions unavailable (model not loaded).")
-        
-        # Full Report with Charts
-        st.header(f"Full {mode} Prediction Report")
-        
-        # Chart 1: Historical Yield Trend
-        historical_avg = historical_df.groupby('year')[f'yield' if mode == 'Maize' else 'yield_per_colony'].mean().reset_index()
-        fig1 = px.line(historical_avg, x='year', y=f'yield' if mode == 'Maize' else 'yield_per_colony', title=f"Historical {mode} Yield Trend (Average per Year)")
-        fig1.add_scatter(x=[year], y=[reg_prediction], mode='markers', name='Predicted Yield', marker=dict(color='red', size=10))
-        fig1.update_layout(showlegend=True)
-        st.plotly_chart(fig1, use_container_width=True)
+                st.warning("Classifier feature mismatch.")
+        except:
+            st.warning("Maize classifier not available.")
 
-        # Chart 2: Predicted Yield vs. Historical Average
-        historical_mean = historical_df[f'yield' if mode == 'Maize' else 'yield_per_colony'].mean()
-        comparison_df = pd.DataFrame({
-            'Type': ['Historical Average', 'Predicted'],
-            'Yield': [historical_mean, reg_prediction]
-        })
-        fig2 = px.bar(comparison_df, x='Type', y='Yield', title=f"Predicted {mode} Yield vs. Historical Average", color='Type')
-        st.plotly_chart(fig2, use_container_width=True)
+    elif mode == "Honey":
+        try:
+            reg_model = joblib.load('honey_yield_regressor2.pkl')
+            preprocessor = joblib.load('honey_preprocessor2.pkl')
+            clf_model = joblib.load('honey_yield_classifier2.pkl')
+            label_encoder = joblib.load('honey_label_encoder2.pkl')
+            historical_df = pd.read_csv('merged_honey_weather.csv')
+            has_classification = True
+            st.success("Honey models and data loaded.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+            st.stop()
 
-        # Chart 3: Yield Distribution (Historical vs. Predicted)
-        fig3 = px.histogram(historical_df, x=f'yield' if mode == 'Maize' else 'yield_per_colony', nbins=30, title=f"Historical {mode} Yield Distribution")
-        fig3.add_vline(x=reg_prediction, line_dash="dash", line_color="red", annotation_text=f"Predicted: {reg_prediction:.2f} {'t/ha' if mode == 'Maize' else 'lbs/colony'}")
-        st.plotly_chart(fig3, use_container_width=True)
+    st.title(f"{mode} Yield Prediction")
+    st.write(f"Enter details to predict {mode.lower()} yield.")
 
-        # Chart 4: Feature Importance
-        feature_names = ['year', 'rainfall' if mode == 'Maize' else 'total_rainfall', 'temp' if mode == 'Maize' else 'avg_temp', 
-                         'tmin' if mode == 'Maize' else None, 'tmax' if mode == 'Maize' else None, 
-                         'rad' if mode == 'Maize' else None, 'et0' if mode == 'Maize' else None, 
-                         'cwb' if mode == 'Maize' else None, 'area' if mode == 'Maize' else 'colonies_number'] + \
-                        list(preprocessor.named_transformers_['cat'].get_feature_names_out(
-                            ['country', 'crop_type', 'season'] if mode == 'Maize' else ['state', 'season']))
-        feature_names = [x for x in feature_names if x is not None]  # Remove None values
-        importance_df = pd.DataFrame({
-            'Feature': feature_names[:len(reg_model.feature_importances_)],
-            'Importance': reg_model.feature_importances_
-        })
-        fig4 = px.bar(importance_df.sort_values(by='Importance', ascending=True), 
-                      x='Importance', y='Feature', title=f"Feature Importance ({mode} Regression Model)", orientation='h')
-        st.plotly_chart(fig4, use_container_width=True)
+    # --- INPUTS ---
+    if mode == "Maize":
+        country = st.selectbox("Country", ["US"])
+        crop_type = st.selectbox("Crop Type", ["Maize"])
+        season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
+        year = st.number_input("Year", 2000, 2050, 2025)
+        area = st.number_input("Area (ha)", 0.0, value=100.0)
+        rainfall = st.number_input("Rainfall (mm)", 0.0, value=500.0)
+        temp = st.number_input("Temperature (°C)", 0.0, value=20.0)
+        tmin = st.number_input("Min Temp (°C)", 0.0, value=15.0)
+        tmax = st.number_input("Max Temp (°C)", 0.0, value=25.0)
+        rad = st.number_input("Solar Radiation (MJ/m²)", 0.0, value=15.0)
+        et0 = st.number_input("Evapotranspiration (mm)", 0.0, value=5.0)
+        cwb = st.number_input("Climatic Water Balance (mm)", -1000.0, value=0.0)
 
-        # Additional Info
-        change = reg_prediction - historical_mean
-        st.write(f"The predicted yield for {year} is {reg_prediction:.2f} {'t/ha' if mode == 'Maize' else 'lbs/colony'}, which is {change:.2f} {'t/ha' if mode == 'Maize' else 'lbs/colony'} {'higher' if change > 0 else 'lower'} than the historical average of {historical_mean:.2f} {'t/ha' if mode == 'Maize' else 'lbs/colony'}.")
-        if mode == "Maize":
-            st.write(f"**Total Crop Quantity**: {total_yield:.2f} tons (based on {area} ha area).")
-        elif mode == "Honey":
-            st.write(f"**Total Honey Production**: {total_yield:.2f} tons (based on {colonies_number} colonies).")
-        
-        if has_classification:
-            st.write(f"**Yield Category**: {clf_label} (indicating {'favorable' if clf_label == 'High' else 'moderate' if clf_label == 'Medium' else 'unfavorable'} conditions).")
-        
-        # Historical Comparison Table
-        recent_years = historical_df[historical_df['year'] >= year - 5].groupby('year')[f'yield' if mode == 'Maize' else 'yield_per_colony'].mean().reset_index()
-        recent_comparison = pd.DataFrame({
-            'Year': recent_years['year'].tolist() + [year],
-            'Average Yield': recent_years[f'yield' if mode == 'Maize' else 'yield_per_colony'].tolist() + [reg_prediction]
-        })
-        st.subheader(f"Recent Years {mode} Yield Comparison")
-        st.dataframe(recent_comparison, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"Error during prediction: {e}")
+    else:  # Honey
+        state = st.selectbox("State", historical_df['state'].unique())
+        season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
+        year = st.number_input("Year", 1995, 2021, 2020)
+        colonies_number = st.number_input("Number of Colonies", 0, value=50000)
+        avg_temp = st.number_input("Average Temperature (°C)", 0.0, value=15.0)
+        total_rainfall = st.number_input("Total Rainfall (mm)", 0.0, value=500.0)
 
-# Sidebar for Model Info
+    if st.button("Predict Yield"):
+        try:
+            if mode == "Maize":
+                input_data = pd.DataFrame({
+                    'country': [country], 'crop_type': [crop_type], 'season': [season],
+                    'year': [year], 'area': [area], 'rainfall': [rainfall], 'temp': [temp],
+                    'tmin': [tmin], 'tmax': [tmax], 'rad': [rad], 'et0': [et0], 'cwb': [cwb]
+                })
+            else:
+                input_data = pd.DataFrame({
+                    'state': [state], 'season': [season], 'year': [year],
+                    'colonies_number': [colonies_number], 'avg_temp': [avg_temp],
+                    'total_rainfall': [total_rainfall]
+                })
+
+            input_preprocessed = preprocessor.transform(input_data)
+            reg_prediction = reg_model.predict(input_preprocessed)[0]
+
+            unit = 't/ha' if mode == 'Maize' else 'lbs/colony'
+            st.success(f"**Predicted Yield**: {reg_prediction:.2f} {unit}")
+
+            if mode == "Maize":
+                total_yield = reg_prediction * area
+                st.success(f"**Total Crop**: {total_yield:.2f} tons")
+            else:
+                total_yield = reg_prediction * colonies_number / 1000
+                st.success(f"**Total Honey**: {total_yield:.2f} tons")
+
+            # Classification
+            if has_classification:
+                clf_pred = clf_model.predict(input_preprocessed)[0]
+                clf_label = label_encoder.inverse_transform([clf_pred])[0]
+                color = "#ccffcc" if clf_label == 'High' else "#ffcccc" if clf_label == 'Low' else "#fff3cd"
+                border = "#44ff44" if clf_label == 'High' else "#ff4444" if clf_label == 'Low' else "#ffc107"
+                st.markdown(f'<div style="background-color:{color}; padding:10px; border-radius:5px; border-left:5px solid {border};">'
+                            f'<strong>Yield Category: {clf_label}</strong></div>', unsafe_allow_html=True)
+            else:
+                st.info("Classification not available.")
+
+            # --- CHARTS ---
+            st.header("Yield Report")
+            y_col = 'yield' if mode == 'Maize' else 'yield_per_colony'
+            hist_avg = historical_df.groupby('year')[y_col].mean().reset_index()
+            fig1 = px.line(hist_avg, x='year', y=y_col, title=f"Historical {mode} Yield Trend")
+            fig1.add_scatter(x=[year], y=[reg_prediction], mode='markers', name='Predicted', marker=dict(color='red', size=10))
+            st.plotly_chart(fig1, use_container_width=True)
+
+            mean_y = historical_df[y_col].mean()
+            comp_df = pd.DataFrame({'Type': ['Historical Avg', 'Predicted'], 'Yield': [mean_y, reg_prediction]})
+            fig2 = px.bar(comp_df, x='Type', y='Yield', color='Type', title="Predicted vs Historical")
+            st.plotly_chart(fig2, use_container_width=True)
+
+            fig3 = px.histogram(historical_df, x=y_col, nbins=30, title="Yield Distribution")
+            fig3.add_vline(x=reg_prediction, line_dash="dash", line_color="red", annotation_text=f"Predicted: {reg_prediction:.2f}")
+            st.plotly_chart(fig3, use_container_width=True)
+
+            # Feature Importance
+            cat_features = list(preprocessor.named_transformers_['cat'].get_feature_names_out(
+                ['country', 'crop_type', 'season'] if mode == 'Maize' else ['state', 'season']
+            ))
+            num_features = ['year', 'rainfall' if mode == 'Maize' else 'total_rainfall',
+                            'temp' if mode == 'Maize' else 'avg_temp'] + (
+                ['tmin', 'tmax', 'rad', 'et0', 'cwb', 'area'] if mode == 'Maize' else ['colonies_number']
+            )
+            feature_names = num_features + cat_features
+            feature_names = [f for f in feature_names if f in [col.split('__')[-1] for col in preprocessor.get_feature_names_out()]]
+            imp_df = pd.DataFrame({
+                'Feature': feature_names[:len(reg_model.feature_importances_)],
+                'Importance': reg_model.feature_importances_
+            })
+            fig4 = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h', title="Feature Importance")
+            st.plotly_chart(fig4, use_container_width=True)
+
+            st.write(f"Predicted yield is **{reg_prediction - mean_y:+.2f} {unit}** than historical average.")
+
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
+
+# --- BEE DISEASE MODE ---
+else:  # mode == "Bee"
+    st.title("Bee Hive Disease Diagnosis")
+    st.write("Upload a hive image to detect diseases and get management advice.")
+
+    bee_model = load_bee_model()
+
+    uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
+
+    if uploaded_file and st.button("Analyze Hive"):
+        try:
+            img = Image.open(uploaded_file).convert('RGB')
+            st.image(img, caption="Uploaded Image", use_column_width=True)
+
+            # Preprocess
+            img_resized = img.resize(BEE_METADATA['image_size'])
+            img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
+            img_array = np.expand_dims(img_array, axis=0) / 255.0
+
+            # Predict
+            prediction = bee_model.predict(img_array)[0]
+            pred_idx = np.argmax(prediction)
+            confidence = float(np.max(prediction))
+            diagnosis = BEE_METADATA['class_names'][pred_idx]
+
+            # Display result
+            is_healthy = diagnosis == 'healthy'
+            alert_class = "alert-success" if is_healthy else "alert-danger"
+            st.markdown(f'<div class="{alert_class}"><strong>Diagnosis: {diagnosis}</strong> '
+                        f'({confidence*100:.1f}% confidence)</div>', unsafe_allow_html=True)
+
+            # Explanation
+            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "No details available."))
+
+            # Advice
+            st.subheader("Recommended Actions")
+            responses = FALLBACK_RESPONSES.get(diagnosis, {})
+            for key, advice in responses.items():
+                st.write(f"**{key.capitalize()}**:")
+                st.write(advice.replace('\n', '<br>'), unsafe_allow_html=True)
+
+            # Confidence bar
+            conf_df = pd.DataFrame({
+                'Condition': BEE_METADATA['class_names'],
+                'Confidence': prediction
+            })
+            fig = px.bar(conf_df, x='Condition', y='Confidence', title="Diagnosis Confidence")
+            st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Analysis failed: {e}")
+
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("Model Information")
-    st.write(f"**{mode} Model**: XGBoost Regressor and Classifier (if available) trained on {historical_df.shape[0]} samples.")
-    st.write("**Features**: Year, rainfall/temp, area/colonies, and categorical vars (state/season for Honey, country/crop/season for Maize).")
-    st.write(f"**Data Range**: 2000–2023 (Maize) or 1995–2021 (Honey).")
-
-    st.write("**Charts**: Historical trends, comparisons, distribution, and feature importance.")
+    st.header("About")
+    st.write("**AgriBee AI** combines:")
+    st.write("- Crop yield prediction (Maize/Honey)")
+    st.write("- Bee hive health diagnosis via deep learning")
+    st.write("**Models**: XGBoost, TensorFlow CNN")
+    st.write("**Data**: USDA, Weather, Hive Images")
+    st.write("Built with Streamlit")
