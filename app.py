@@ -36,7 +36,7 @@ st.markdown(
 # --- Header Image ---
 try:
     st.markdown('<div class="image-container">', unsafe_allow_html=True)
-    st.image("src/neu.jpg", use_container_width=True)
+    st.image("neu.jpg", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 except Exception as e:
     st.warning("Header image not found. Continuing without it.")
@@ -55,7 +55,7 @@ def load_bee_model():
                 super().__init__(**kwargs)
         tf.keras.utils.get_custom_objects()['DepthwiseConv2D'] = CustomDepthwiseConv2D
         
-        model_path = 'src/bee.h5'
+        model_path = 'bee.h5'
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         
