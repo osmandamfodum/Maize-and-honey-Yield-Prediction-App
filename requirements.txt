@@ -4,3 +4,8 @@ scikit-learn==1.7.0
 xgboost==3.0.5
 plotly
 joblib==1.5.1  
+altair
+streamlit
+tensorflow
+Pillow
+requests
