@@ -249,21 +249,28 @@ else:  # mode == "Bee"
 
     uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
 
-    if uploaded_file and st.button("Analyze Hive"):
-        try:
-            img = Image.open(uploaded_file).convert('RGB')
-            st.image(img, caption="Uploaded Image", use_column_width=True)
+if uploaded_file and st.button("Analyze Hive"):
+    try:
+        img = Image.open(uploaded_file).convert('L')  # Grayscale
+        st.image(img, caption="Uploaded Image", use_column_width=True)
 
-            # Preprocess
-            img_resized = img.resize(BEE_METADATA['image_size'])
-            img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
-            img_array = np.expand_dims(img_array, axis=0) / 255.0
+        # Resize to 28x28 and preprocess
+        img_resized = img.resize((28, 28))
+        img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
+        
+        # Option A: Flatten for (None, 784) input
+        img_array = img_array.reshape(1, -1) / 255.0
 
-            # Predict
-            prediction = bee_model.predict(img_array)[0]
-            pred_idx = np.argmax(prediction)
-            confidence = float(np.max(prediction))
-            diagnosis = BEE_METADATA['class_names'][pred_idx]
+        # Option B: Use (1, 28, 28, 1) if model expects 4D
+        # img_array = np.expand_dims(img_array, axis=-1)
+        # img_array = np.expand_dims(img_array, axis=0) / 255.0
+
+        # Predict
+        prediction = bee_model.predict(img_array)[0]
+        pred_idx = np.argmax(prediction)
+        confidence = float(np.max(prediction))
+        diagnosis = BEE_METADATA['class_names'][pred_idx]
+        ...
 
             # Display result
             is_healthy = diagnosis == 'healthy'
