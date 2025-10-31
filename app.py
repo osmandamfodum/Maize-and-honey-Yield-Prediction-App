@@ -46,7 +46,7 @@ mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, ho
 # --- BEE MODEL & METADATA (Only load once) ---
 @st.cache_resource
 def load_bee_model():
-    model_path = 'Final_bee_model.h5'
+    model_path = 'bee.h5'
     if not os.path.exists(model_path):
         st.error("Bee model not found. Place 'Final_bee_model.h5' in the root directory.")
         st.stop()
