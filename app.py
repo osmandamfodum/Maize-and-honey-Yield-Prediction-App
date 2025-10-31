@@ -249,7 +249,7 @@ else:  # mode == "Bee"
 
     uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
 
-if uploaded_file and st.button("Analyze Hive"):
+    if uploaded_file and st.button("Analyze Hive"):
     try:
         img = Image.open(uploaded_file).convert('L')  # Grayscale
         st.image(img, caption="Uploaded Image", use_column_width=True)
