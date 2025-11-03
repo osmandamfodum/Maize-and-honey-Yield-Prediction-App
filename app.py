@@ -6,14 +6,13 @@ import plotly.express as px
 import tensorflow as tf
 from PIL import Image
 import os
-import json
 import logging
 
 # Suppress TensorFlow logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-# Custom DepthwiseConv2D layer
+# Custom DepthwiseConv2D layer to avoid group issues
 class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
     def __init__(self, **kwargs):
         kwargs.pop('groups', None)
@@ -43,15 +42,19 @@ st.markdown('</div>', unsafe_allow_html=True)
 # --- MODE SELECTION ---
 mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
 
-# --- BEE MODEL & METADATA (Only load once) ---
+# --- BEE MODEL & METADATA ---
 @st.cache_resource
 def load_bee_model():
     model_path = 'bee_224_model.h5'
     if not os.path.exists(model_path):
-        st.error("Bee model not found. Place 'Final_bee_model.h5' in the root directory.")
+        st.error("Bee model not found. Place 'bee_224_model.h5' in the root directory.")
         st.stop()
-    model = tf.keras.models.load_model(model_path)
-    return model
+    try:
+        model = tf.keras.models.load_model(model_path, compile=False)
+        return model
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        st.stop()
 
 BEE_METADATA = {
     'class_names': [
@@ -108,7 +111,7 @@ if mode in ["Maize", "Honey"]:
             historical_df = pd.read_csv('processed_us_maize_data.csv')
             st.success("Maize model and data loaded.")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error loading Maize models: {e}")
             st.stop()
 
         try:
@@ -119,9 +122,9 @@ if mode in ["Maize", "Honey"]:
                 has_classification = True
                 st.success("Maize classifier loaded.")
             else:
-                st.warning("Classifier feature mismatch.")
-        except:
-            st.warning("Maize classifier not available.")
+                st.warning("Classifier feature mismatch. Classification disabled.")
+        except Exception as e:
+            st.warning(f"Classifier not available: {e}")
 
     elif mode == "Honey":
         try:
@@ -133,7 +136,7 @@ if mode in ["Maize", "Honey"]:
             has_classification = True
             st.success("Honey models and data loaded.")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error loading Honey models: {e}")
             st.stop()
 
     st.title(f"{mode} Yield Prediction")
@@ -219,21 +222,24 @@ if mode in ["Maize", "Honey"]:
             st.plotly_chart(fig3, use_container_width=True)
 
             # Feature Importance
-            cat_features = list(preprocessor.named_transformers_['cat'].get_feature_names_out(
-                ['country', 'crop_type', 'season'] if mode == 'Maize' else ['state', 'season']
-            ))
-            num_features = ['year', 'rainfall' if mode == 'Maize' else 'total_rainfall',
-                            'temp' if mode == 'Maize' else 'avg_temp'] + (
-                ['tmin', 'tmax', 'rad', 'et0', 'cwb', 'area'] if mode == 'Maize' else ['colonies_number']
-            )
-            feature_names = num_features + cat_features
-            feature_names = [f for f in feature_names if f in [col.split('__')[-1] for col in preprocessor.get_feature_names_out()]]
-            imp_df = pd.DataFrame({
-                'Feature': feature_names[:len(reg_model.feature_importances_)],
-                'Importance': reg_model.feature_importances_
-            })
-            fig4 = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h', title="Feature Importance")
-            st.plotly_chart(fig4, use_container_width=True)
+            try:
+                cat_features = list(preprocessor.named_transformers_['cat'].get_feature_names_out(
+                    ['country', 'crop_type', 'season'] if mode == 'Maize' else ['state', 'season']
+                ))
+                num_features = (['year', 'area', 'rainfall', 'temp', 'tmin', 'tmax', 'rad', 'et0', 'cwb'] if mode == 'Maize'
+                                else ['year', 'colonies_number', 'avg_temp', 'total_rainfall'])
+                feature_names = num_features + cat_features
+                feature_names = [f for f in feature_names if any(f in col for col in preprocessor.get_feature_names_out())]
+
+                if len(reg_model.feature_importances_) == len(feature_names):
+                    imp_df = pd.DataFrame({
+                        'Feature': feature_names,
+                        'Importance': reg_model.feature_importances_
+                    })
+                    fig4 = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h', title="Feature Importance")
+                    st.plotly_chart(fig4, use_container_width=True)
+            except:
+                st.warning("Feature importance not available.")
 
             st.write(f"Predicted yield is **{reg_prediction - mean_y:+.2f} {unit}** than historical average.")
 
@@ -250,27 +256,22 @@ else:  # mode == "Bee"
     uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
 
     if uploaded_file and st.button("Analyze Hive"):
-    try:
-        img = Image.open(uploaded_file).convert('L')  # Grayscale
-        st.image(img, caption="Uploaded Image", use_column_width=True)
+        try:
+            # Load and display image
+            img = Image.open(uploaded_file).convert('RGB')  # Use RGB
+            st.image(img, caption="Uploaded Image", use_column_width=True)
 
-        # Resize to 28x28 and preprocess
-        img_resized = img.resize((28, 28))
-        img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
-        
-        # Option A: Flatten for (None, 784) input
-        img_array = img_array.reshape(1, -1) / 255.0
+            # Preprocess: Resize to 224x224, normalize, add batch dim
+            img_resized = img.resize(BEE_METADATA['image_size'])  # (224, 224)
+            img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
+            img_array = img_array / 255.0
+            img_array = np.expand_dims(img_array, axis=0)  # Shape: (1, 224, 224, 3)
 
-        # Option B: Use (1, 28, 28, 1) if model expects 4D
-        # img_array = np.expand_dims(img_array, axis=-1)
-        # img_array = np.expand_dims(img_array, axis=0) / 255.0
-
-        # Predict
-        prediction = bee_model.predict(img_array)[0]
-        pred_idx = np.argmax(prediction)
-        confidence = float(np.max(prediction))
-        diagnosis = BEE_METADATA['class_names'][pred_idx]
-        ...
+            # Predict
+            prediction = bee_model.predict(img_array, verbose=0)[0]
+            pred_idx = np.argmax(prediction)
+            confidence = float(np.max(prediction))
+            diagnosis = BEE_METADATA['class_names'][pred_idx]
 
             # Display result
             is_healthy = diagnosis == 'healthy'
@@ -288,12 +289,12 @@ else:  # mode == "Bee"
                 st.write(f"**{key.capitalize()}**:")
                 st.write(advice.replace('\n', '<br>'), unsafe_allow_html=True)
 
-            # Confidence bar
+            # Confidence bar chart
             conf_df = pd.DataFrame({
                 'Condition': BEE_METADATA['class_names'],
                 'Confidence': prediction
             })
-            fig = px.bar(conf_df, x='Condition', y='Confidence', title="Diagnosis Confidence")
+            fig = px.bar(conf_df, x='Condition', y='Confidence', title="Diagnosis Confidence", range_y=[0, 1])
             st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
@@ -301,10 +302,10 @@ else:  # mode == "Bee"
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("About")
-    st.write("**AgriBee AI** combines:")
+    st.header("About AgriBee AI")
+    st.write("**Combines:**")
     st.write("- Crop yield prediction (Maize/Honey)")
     st.write("- Bee hive health diagnosis via deep learning")
     st.write("**Models**: XGBoost, TensorFlow CNN")
     st.write("**Data**: USDA, Weather, Hive Images")
-    st.write("Built with Streamlit")
+    st.write("Built with **Streamlit**")
