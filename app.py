@@ -1,3 +1,7 @@
+# ------------------------------------------------------------
+# app.py – AgriBee AI (Maize, Honey, Bee Disease)
+# Fully compatible with bee_224_model.h5 from bee_224_retrain.py
+# ------------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,24 +10,16 @@ import plotly.express as px
 import tensorflow as tf
 from PIL import Image
 import os
-import logging
+import json
 
-# Suppress TensorFlow logs
+# ------------------- Suppress TF warnings -------------------
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-# Custom DepthwiseConv2D layer to avoid group issues
-class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
-    def __init__(self, **kwargs):
-        kwargs.pop('groups', None)
-        super().__init__(**kwargs)
-
-tf.keras.utils.get_custom_objects()['DepthwiseConv2D'] = CustomDepthwiseConv2D
-
-# --- CONFIG ---
+# ------------------- Page Config -------------------
 st.set_page_config(page_title="AgriBee AI", layout="wide")
 
-# Custom CSS
+# ------------------- Custom CSS -------------------
 st.markdown("""
 <style>
     .stApp { background-color: white; color: black; }
@@ -34,36 +30,38 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header Image
+# ------------------- Header Image -------------------
 st.markdown('<div class="image-container">', unsafe_allow_html=True)
-st.image("neu.jpg", use_column_width=True)
+if os.path.exists("neu.jpg"):
+    st.image("neu.jpg", use_column_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- MODE SELECTION ---
+# ------------------- MODE SELECTION -------------------
 mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
 
-# --- BEE MODEL & METADATA ---
-@st.cache_resource
-def load_bee_model():
-    model_path = 'bee_224_model.h5'
-    if not os.path.exists(model_path):
-        st.error("Bee model not found. Place 'bee_224_model.h5' in the root directory.")
-        st.stop()
-    try:
-        model = tf.keras.models.load_model(model_path, compile=False)
-        return model
-    except Exception as e:
-        st.error(f"Failed to load model: {e}")
-        st.stop()
+# ------------------- BEE CLASS NAMES (MUST MATCH TRAINING) -------------------
+CLASS_NAMES = [
+    'Varroa, Small Hive Beetles',
+    'ant problems',
+    'few varroa, hive beetles',
+    'healthy',
+    'hive being robbed',
+    'missing queen'
+]
 
+# ------------------- BEE METADATA -------------------
 BEE_METADATA = {
-    'class_names': [
-        'Varroa, Small Hive Beetles', 'ant problems', 'few varroa, hive beetles',
-        'healthy', 'hive being robbed', 'missing queen'
-    ],
+    'class_names': CLASS_NAMES,
     'image_size': (224, 224)
 }
 
+# Optional: Load from JSON if exists
+if os.path.exists("bee_metadata.json"):
+    with open("bee_metadata.json") as f:
+        loaded = json.load(f)
+        BEE_METADATA.update(loaded)
+
+# ------------------- DIAGNOSIS TEXT -------------------
 DIAGNOSIS_EXPLANATIONS = {
     'Varroa, Small Hive Beetles': "Small red or brown spots detected, indicating Varroa Mites and Small Hive Beetles infestation.",
     'ant problems': "Presence of ants detected, suggesting ant-related issues in the hive.",
@@ -100,33 +98,57 @@ FALLBACK_RESPONSES = {
     }
 }
 
-# --- MAIZE / HONEY MODE ---
+# ------------------- LOAD BEE MODEL (SINGLE INPUT) -------------------
+@st.cache_resource
+def load_bee_model():
+    model_path = 'bee_224_model.h5'
+    if not os.path.exists(model_path):
+        st.error("Bee model not found: 'bee_224_model.h5' missing.")
+        st.stop()
+
+    try:
+        model = tf.keras.models.load_model(model_path, compile=False)
+
+        # --- Safety check: single input ---
+        if isinstance(model.inputs, list) and len(model.inputs) > 1:
+            st.warning("Model has multiple inputs. Using only the first one.")
+            model = tf.keras.Model(inputs=model.inputs[0], outputs=model.outputs[0])
+
+        # Verify input shape
+        expected = (None, 224, 224, 3)
+        if model.input_shape != expected:
+            st.warning(f"Model expects {model.input_shape}, but app sends (1,224,224,3).")
+
+        return model
+    except Exception as e:
+        st.error(f"Failed to load bee model: {e}")
+        st.stop()
+
+# ------------------- MAIZE / HONEY MODE -------------------
 if mode in ["Maize", "Honey"]:
     has_classification = False
 
+    # --- Load models ---
     if mode == "Maize":
         try:
             reg_model = joblib.load('us_maize_yield_regressor.pkl')
             preprocessor = joblib.load('preprocessor.pkl')
             historical_df = pd.read_csv('processed_us_maize_data.csv')
-            st.success("Maize model and data loaded.")
+            st.success("Maize models loaded.")
         except Exception as e:
-            st.error(f"Error loading Maize models: {e}")
+            st.error(f"Maize load error: {e}")
             st.stop()
 
         try:
             clf_model = joblib.load('us_maize_yield_classifier.pkl')
             label_encoder = joblib.load('label_encoder.pkl')
-            expected_features = len(preprocessor.get_feature_names_out())
-            if hasattr(clf_model, 'n_features_in_') and clf_model.n_features_in_ == expected_features:
+            if len(preprocessor.get_feature_names_out()) == clf_model.n_features_in_:
                 has_classification = True
-                st.success("Maize classifier loaded.")
-            else:
-                st.warning("Classifier feature mismatch. Classification disabled.")
-        except Exception as e:
-            st.warning(f"Classifier not available: {e}")
+                st.success("Maize classifier ready.")
+        except:
+            st.warning("Maize classifier unavailable.")
 
-    elif mode == "Honey":
+    else:  # Honey
         try:
             reg_model = joblib.load('honey_yield_regressor2.pkl')
             preprocessor = joblib.load('honey_preprocessor2.pkl')
@@ -134,15 +156,13 @@ if mode in ["Maize", "Honey"]:
             label_encoder = joblib.load('honey_label_encoder2.pkl')
             historical_df = pd.read_csv('merged_honey_weather.csv')
             has_classification = True
-            st.success("Honey models and data loaded.")
+            st.success("Honey models loaded.")
         except Exception as e:
-            st.error(f"Error loading Honey models: {e}")
+            st.error(f"Honey load error: {e}")
             st.stop()
 
+    # --- UI ---
     st.title(f"{mode} Yield Prediction")
-    st.write(f"Enter details to predict {mode.lower()} yield.")
-
-    # --- INPUTS ---
     if mode == "Maize":
         country = st.selectbox("Country", ["US"])
         crop_type = st.selectbox("Crop Type", ["Maize"])
@@ -156,8 +176,7 @@ if mode in ["Maize", "Honey"]:
         rad = st.number_input("Solar Radiation (MJ/m²)", 0.0, value=15.0)
         et0 = st.number_input("Evapotranspiration (mm)", 0.0, value=5.0)
         cwb = st.number_input("Climatic Water Balance (mm)", -1000.0, value=0.0)
-
-    else:  # Honey
+    else:
         state = st.selectbox("State", historical_df['state'].unique())
         season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
         year = st.number_input("Year", 1995, 2021, 2020)
@@ -180,132 +199,93 @@ if mode in ["Maize", "Honey"]:
                     'total_rainfall': [total_rainfall]
                 })
 
-            input_preprocessed = preprocessor.transform(input_data)
-            reg_prediction = reg_model.predict(input_preprocessed)[0]
-
+            X = preprocessor.transform(input_data)
+            pred = reg_model.predict(X)[0]
             unit = 't/ha' if mode == 'Maize' else 'lbs/colony'
-            st.success(f"**Predicted Yield**: {reg_prediction:.2f} {unit}")
+            st.success(f"**Predicted Yield**: {pred:.2f} {unit}")
 
-            if mode == "Maize":
-                total_yield = reg_prediction * area
-                st.success(f"**Total Crop**: {total_yield:.2f} tons")
-            else:
-                total_yield = reg_prediction * colonies_number / 1000
-                st.success(f"**Total Honey**: {total_yield:.2f} tons")
+            total = pred * area if mode == "Maize" else pred * colonies_number / 1000
+            st.success(f"**Total {'Crop' if mode == 'Maize' else 'Honey'}**: {total:.2f} tons")
 
-            # Classification
             if has_classification:
-                clf_pred = clf_model.predict(input_preprocessed)[0]
-                clf_label = label_encoder.inverse_transform([clf_pred])[0]
-                color = "#ccffcc" if clf_label == 'High' else "#ffcccc" if clf_label == 'Low' else "#fff3cd"
-                border = "#44ff44" if clf_label == 'High' else "#ff4444" if clf_label == 'Low' else "#ffc107"
+                cat = label_encoder.inverse_transform(clf_model.predict(X))[0]
+                color = "#ccffcc" if cat == 'High' else "#ffcccc" if cat == 'Low' else "#fff3cd"
+                border = "#44ff44" if cat == 'High' else "#ff4444" if cat == 'Low' else "#ffc107"
                 st.markdown(f'<div style="background-color:{color}; padding:10px; border-radius:5px; border-left:5px solid {border};">'
-                            f'<strong>Yield Category: {clf_label}</strong></div>', unsafe_allow_html=True)
-            else:
-                st.info("Classification not available.")
+                            f'<strong>Yield Category: {cat}</strong></div>', unsafe_allow_html=True)
 
-            # --- CHARTS ---
-            st.header("Yield Report")
+            # Charts
             y_col = 'yield' if mode == 'Maize' else 'yield_per_colony'
-            hist_avg = historical_df.groupby('year')[y_col].mean().reset_index()
-            fig1 = px.line(hist_avg, x='year', y=y_col, title=f"Historical {mode} Yield Trend")
-            fig1.add_scatter(x=[year], y=[reg_prediction], mode='markers', name='Predicted', marker=dict(color='red', size=10))
+            hist = historical_df.groupby('year')[y_col].mean().reset_index()
+            fig1 = px.line(hist, x='year', y=y_col, title=f"Historical {mode} Yield")
+            fig1.add_scatter(x=[year], y=[pred], mode='markers', name='Predicted', marker=dict(color='red', size=12))
             st.plotly_chart(fig1, use_container_width=True)
 
             mean_y = historical_df[y_col].mean()
-            comp_df = pd.DataFrame({'Type': ['Historical Avg', 'Predicted'], 'Yield': [mean_y, reg_prediction]})
-            fig2 = px.bar(comp_df, x='Type', y='Yield', color='Type', title="Predicted vs Historical")
-            st.plotly_chart(fig2, use_container_width=True)
-
-            fig3 = px.histogram(historical_df, x=y_col, nbins=30, title="Yield Distribution")
-            fig3.add_vline(x=reg_prediction, line_dash="dash", line_color="red", annotation_text=f"Predicted: {reg_prediction:.2f}")
-            st.plotly_chart(fig3, use_container_width=True)
-
-            # Feature Importance
-            try:
-                cat_features = list(preprocessor.named_transformers_['cat'].get_feature_names_out(
-                    ['country', 'crop_type', 'season'] if mode == 'Maize' else ['state', 'season']
-                ))
-                num_features = (['year', 'area', 'rainfall', 'temp', 'tmin', 'tmax', 'rad', 'et0', 'cwb'] if mode == 'Maize'
-                                else ['year', 'colonies_number', 'avg_temp', 'total_rainfall'])
-                feature_names = num_features + cat_features
-                feature_names = [f for f in feature_names if any(f in col for col in preprocessor.get_feature_names_out())]
-
-                if len(reg_model.feature_importances_) == len(feature_names):
-                    imp_df = pd.DataFrame({
-                        'Feature': feature_names,
-                        'Importance': reg_model.feature_importances_
-                    })
-                    fig4 = px.bar(imp_df.sort_values('Importance'), x='Importance', y='Feature', orientation='h', title="Feature Importance")
-                    st.plotly_chart(fig4, use_container_width=True)
-            except:
-                st.warning("Feature importance not available.")
-
-            st.write(f"Predicted yield is **{reg_prediction - mean_y:+.2f} {unit}** than historical average.")
+            comp = pd.DataFrame({'Type': ['Avg', 'Predicted'], 'Yield': [mean_y, pred]})
+            st.plotly_chart(px.bar(comp, x='Type', y='Yield', color='Type'), use_container_width=True)
 
         except Exception as e:
-            st.error(f"Prediction error: {e}")
+            st.error(f"Prediction failed: {e}")
 
-# --- BEE DISEASE MODE ---
-else:  # mode == "Bee"
+# ------------------- BEE DISEASE MODE -------------------
+else:
     st.title("Bee Hive Disease Diagnosis")
     st.write("Upload a hive image to detect diseases and get management advice.")
 
     bee_model = load_bee_model()
-
     uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
 
     if uploaded_file and st.button("Analyze Hive"):
         try:
-            # Load and display image
-            img = Image.open(uploaded_file).convert('RGB')  # Use RGB
+            # Load & display
+            img = Image.open(uploaded_file).convert('RGB')
             st.image(img, caption="Uploaded Image", use_column_width=True)
 
-            # Preprocess: Resize to 224x224, normalize, add batch dim
-            img_resized = img.resize(BEE_METADATA['image_size'])  # (224, 224)
+            # Preprocess: 224x224, normalize
+            img_resized = img.resize(BEE_METADATA['image_size'])
             img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
             img_array = img_array / 255.0
-            img_array = np.expand_dims(img_array, axis=0)  # Shape: (1, 224, 224, 3)
+            img_array = np.expand_dims(img_array, axis=0)  # (1, 224, 224, 3)
 
             # Predict
-            prediction = bee_model.predict(img_array, verbose=0)[0]
-            pred_idx = np.argmax(prediction)
-            confidence = float(np.max(prediction))
-            diagnosis = BEE_METADATA['class_names'][pred_idx]
+            preds = bee_model.predict(img_array, verbose=0)[0]
+            idx = np.argmax(preds)
+            confidence = float(preds[idx])
+            diagnosis = BEE_METADATA['class_names'][idx]
 
-            # Display result
-            is_healthy = diagnosis == 'healthy'
-            alert_class = "alert-success" if is_healthy else "alert-danger"
-            st.markdown(f'<div class="{alert_class}"><strong>Diagnosis: {diagnosis}</strong> '
+            # Result
+            alert = "alert-success" if diagnosis == 'healthy' else "alert-danger"
+            st.markdown(f'<div class="{alert}"><strong>Diagnosis: {diagnosis}</strong> '
                         f'({confidence*100:.1f}% confidence)</div>', unsafe_allow_html=True)
 
             # Explanation
-            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "No details available."))
+            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "No details."))
 
             # Advice
             st.subheader("Recommended Actions")
-            responses = FALLBACK_RESPONSES.get(diagnosis, {})
-            for key, advice in responses.items():
+            for key, text in FALLBACK_RESPONSES.get(diagnosis, {}).items():
                 st.write(f"**{key.capitalize()}**:")
-                st.write(advice.replace('\n', '<br>'), unsafe_allow_html=True)
+                st.write(text.replace('\n', '<br>'), unsafe_allow_html=True)
 
-            # Confidence bar chart
+            # Confidence chart
             conf_df = pd.DataFrame({
                 'Condition': BEE_METADATA['class_names'],
-                'Confidence': prediction
+                'Confidence': preds
             })
-            fig = px.bar(conf_df, x='Condition', y='Confidence', title="Diagnosis Confidence", range_y=[0, 1])
+            fig = px.bar(conf_df, x='Condition', y='Confidence', range_y=[0, 1],
+                         title="Diagnosis Confidence")
             st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
             st.error(f"Analysis failed: {e}")
 
-# --- SIDEBAR ---
+# ------------------- SIDEBAR -------------------
 with st.sidebar:
-    st.header("About AgriBee AI")
-    st.write("**Combines:**")
-    st.write("- Crop yield prediction (Maize/Honey)")
-    st.write("- Bee hive health diagnosis via deep learning")
-    st.write("**Models**: XGBoost, TensorFlow CNN")
-    st.write("**Data**: USDA, Weather, Hive Images")
+    st.header("AgriBee AI")
+    st.write("**Features:**")
+    st.write("- Maize & Honey Yield Prediction")
+    st.write("- Bee Hive Disease Diagnosis")
+    st.write("**Models:** XGBoost + MobileNetV2")
+    st.write("**Data:** USDA, Weather, 5k+ Hive Images")
     st.write("Built with **Streamlit**")
