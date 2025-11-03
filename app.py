@@ -1,6 +1,6 @@
 # ------------------------------------------------------------
 # app.py – AgriBee AI (Maize, Honey, Bee Disease)
-# Fully compatible with bee_224_model.h5 from bee_224_retrain.py
+# 100% compatible with your newly trained bee_224_model.h5
 # ------------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -34,32 +34,34 @@ st.markdown("""
 st.markdown('<div class="image-container">', unsafe_allow_html=True)
 if os.path.exists("neu.jpg"):
     st.image("neu.jpg", use_column_width=True)
+else:
+    st.markdown("### AgriBee AI")
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ------------------- MODE SELECTION -------------------
 mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
 
-# ------------------- BEE CLASS NAMES (MUST MATCH TRAINING) -------------------
-CLASS_NAMES = [
-    'Varroa, Small Hive Beetles',
-    'ant problems',
-    'few varroa, hive beetles',
-    'healthy',
-    'hive being robbed',
-    'missing queen'
-]
-
-# ------------------- BEE METADATA -------------------
+# ------------------- BEE METADATA (Load from JSON if exists) -------------------
 BEE_METADATA = {
-    'class_names': CLASS_NAMES,
+    'class_names': [
+        'Varroa, Small Hive Beetles',
+        'ant problems',
+        'few varroa, hive beetles',
+        'healthy',
+        'hive being robbed',
+        'missing queen'
+    ],
     'image_size': (224, 224)
 }
 
-# Optional: Load from JSON if exists
 if os.path.exists("bee_metadata.json"):
-    with open("bee_metadata.json") as f:
-        loaded = json.load(f)
-        BEE_METADATA.update(loaded)
+    try:
+        with open("bee_metadata.json") as f:
+            loaded = json.load(f)
+            BEE_METADATA.update(loaded)
+        st.sidebar.success("Bee metadata loaded from JSON")
+    except:
+        st.sidebar.warning("Using default metadata")
 
 # ------------------- DIAGNOSIS TEXT -------------------
 DIAGNOSIS_EXPLANATIONS = {
@@ -98,28 +100,29 @@ FALLBACK_RESPONSES = {
     }
 }
 
-# ------------------- LOAD BEE MODEL (SINGLE INPUT) -------------------
+# ------------------- LOAD BEE MODEL (SINGLE INPUT ONLY) -------------------
 @st.cache_resource
 def load_bee_model():
-    model_path = 'bee_224_model.h5'
+    model_path = 'bee_224_model2.h5'
     if not os.path.exists(model_path):
         st.error("Bee model not found: 'bee_224_model.h5' missing.")
         st.stop()
 
     try:
         model = tf.keras.models.load_model(model_path, compile=False)
+        
+        # --- تأكد من أن النموذج له مدخل واحد فقط ---
+        if isinstance(model.inputs, list):
+            if len(model.inputs) != 1:
+                st.error(f"Model has {len(model.inputs)} inputs. Expected 1.")
+                st.stop()
+        else:
+            if model.input_shape != (None, 224, 224, 3):
+                st.warning(f"Unexpected input shape: {model.input_shape}")
 
-        # --- Safety check: single input ---
-        if isinstance(model.inputs, list) and len(model.inputs) > 1:
-            st.warning("Model has multiple inputs. Using only the first one.")
-            model = tf.keras.Model(inputs=model.inputs[0], outputs=model.outputs[0])
-
-        # Verify input shape
-        expected = (None, 224, 224, 3)
-        if model.input_shape != expected:
-            st.warning(f"Model expects {model.input_shape}, but app sends (1,224,224,3).")
-
+        st.success("Bee model loaded successfully (224×224, single input)")
         return model
+
     except Exception as e:
         st.error(f"Failed to load bee model: {e}")
         st.stop()
@@ -128,7 +131,6 @@ def load_bee_model():
 if mode in ["Maize", "Honey"]:
     has_classification = False
 
-    # --- Load models ---
     if mode == "Maize":
         try:
             reg_model = joblib.load('us_maize_yield_regressor.pkl')
@@ -161,7 +163,6 @@ if mode in ["Maize", "Honey"]:
             st.error(f"Honey load error: {e}")
             st.stop()
 
-    # --- UI ---
     st.title(f"{mode} Yield Prediction")
     if mode == "Maize":
         country = st.selectbox("Country", ["US"])
@@ -214,7 +215,6 @@ if mode in ["Maize", "Honey"]:
                 st.markdown(f'<div style="background-color:{color}; padding:10px; border-radius:5px; border-left:5px solid {border};">'
                             f'<strong>Yield Category: {cat}</strong></div>', unsafe_allow_html=True)
 
-            # Charts
             y_col = 'yield' if mode == 'Maize' else 'yield_per_colony'
             hist = historical_df.groupby('year')[y_col].mean().reset_index()
             fig1 = px.line(hist, x='year', y=y_col, title=f"Historical {mode} Yield")
@@ -222,7 +222,7 @@ if mode in ["Maize", "Honey"]:
             st.plotly_chart(fig1, use_container_width=True)
 
             mean_y = historical_df[y_col].mean()
-            comp = pd.DataFrame({'Type': ['Avg', 'Predicted'], 'Yield': [mean_y, pred]})
+            comp = pd.DataFrame({'Type': ['Historical Avg', 'Predicted'], 'Yield': [mean_y, pred]})
             st.plotly_chart(px.bar(comp, x='Type', y='Yield', color='Type'), use_container_width=True)
 
         except Exception as e:
@@ -238,11 +238,10 @@ else:
 
     if uploaded_file and st.button("Analyze Hive"):
         try:
-            # Load & display
             img = Image.open(uploaded_file).convert('RGB')
             st.image(img, caption="Uploaded Image", use_column_width=True)
 
-            # Preprocess: 224x224, normalize
+            # Preprocess
             img_resized = img.resize(BEE_METADATA['image_size'])
             img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
             img_array = img_array / 255.0
@@ -254,27 +253,25 @@ else:
             confidence = float(preds[idx])
             diagnosis = BEE_METADATA['class_names'][idx]
 
-            # Result
-            alert = "alert-success" if diagnosis == 'healthy' else "alert-danger"
-            st.markdown(f'<div class="{alert}"><strong>Diagnosis: {diagnosis}</strong> '
-                        f'({confidence*100:.1f}% confidence)</div>', unsafe_allow_html=True)
+            # --- Confidence Alerts ---
+            if confidence >= 0.85:
+                st.success(f"موثوق: {diagnosis} ({confidence*100:.1f}%)")
+            elif confidence >= 0.70:
+                st.warning(f"ثقة متوسطة: {diagnosis} ({confidence*100:.1f}%). تحقق من جودة الصورة.")
+            else:
+                st.error(f"ثقة منخفضة: {diagnosis} ({confidence*100:.1f}%). جرب صورة أوضح.")
 
-            # Explanation
-            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "No details."))
+            # --- Explanation & Advice ---
+            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "غير معروف"))
 
-            # Advice
             st.subheader("Recommended Actions")
             for key, text in FALLBACK_RESPONSES.get(diagnosis, {}).items():
                 st.write(f"**{key.capitalize()}**:")
                 st.write(text.replace('\n', '<br>'), unsafe_allow_html=True)
 
-            # Confidence chart
-            conf_df = pd.DataFrame({
-                'Condition': BEE_METADATA['class_names'],
-                'Confidence': preds
-            })
-            fig = px.bar(conf_df, x='Condition', y='Confidence', range_y=[0, 1],
-                         title="Diagnosis Confidence")
+            # --- Confidence Chart ---
+            conf_df = pd.DataFrame({'Condition': BEE_METADATA['class_names'], 'Confidence': preds})
+            fig = px.bar(conf_df, x='Condition', y='Confidence', range_y=[0, 1], title="Diagnosis Confidence")
             st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
