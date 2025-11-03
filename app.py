@@ -1,7 +1,9 @@
 # ------------------------------------------------------------
 # app.py – AgriBee AI (Maize, Honey, Bee Disease)
-# 100% compatible with your newly trained bee_224_model.h5
+# 100% compatible with NEW bee_224_model.h5 (1 input only)
+# Deploy-ready for Streamlit Cloud
 # ------------------------------------------------------------
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,7 +13,10 @@ import tensorflow as tf
 from PIL import Image
 import os
 import json
-st.cache_resource.clear()
+
+# ------------------- إجبار حذف الـ cache القديم -------------------
+st.cache_resource.clear()  # يحذف النموذج القديم من الذاكرة
+
 # ------------------- Suppress TF warnings -------------------
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -39,9 +44,9 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # ------------------- MODE SELECTION -------------------
-mode = st.radio("Select Prediction Mode", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
+mode = st.radio("اختر وضع التنبؤ", ["Maize", "Honey", "Bee"], index=0, horizontal=True)
 
-# ------------------- BEE METADATA (Load from JSON if exists) -------------------
+# ------------------- BEE METADATA -------------------
 BEE_METADATA = {
     'class_names': [
         'Varroa, Small Hive Beetles',
@@ -54,75 +59,74 @@ BEE_METADATA = {
     'image_size': (224, 224)
 }
 
+# تحميل من JSON إذا وُجد
 if os.path.exists("bee_metadata.json"):
     try:
         with open("bee_metadata.json") as f:
             loaded = json.load(f)
             BEE_METADATA.update(loaded)
-        st.sidebar.success("Bee metadata loaded from JSON")
     except:
-        st.sidebar.warning("Using default metadata")
+        pass
 
 # ------------------- DIAGNOSIS TEXT -------------------
 DIAGNOSIS_EXPLANATIONS = {
-    'Varroa, Small Hive Beetles': "Small red or brown spots detected, indicating Varroa Mites and Small Hive Beetles infestation.",
-    'ant problems': "Presence of ants detected, suggesting ant-related issues in the hive.",
-    'few varroa, hive beetles': "Low levels of Varroa Mites and Small Hive Beetles detected.",
-    'healthy': "No visible signs of disease; the hive appears healthy.",
-    'hive being robbed': "Signs of robbing behavior detected, such as increased aggression or dead bees.",
-    'missing queen': "Indications of a missing queen, such as lack of brood or queen cells."
+    'Varroa, Small Hive Beetles': "تم اكتشاف بقع حمراء أو بنية صغيرة، تشير إلى إصابة بعث الـ Varroa وخنافس الخلية.",
+    'ant problems': "تم اكتشاف وجود نمل، مما يشير إلى مشاكل متعلقة بالنمل في الخلية.",
+    'few varroa, hive beetles': "تم اكتشاف مستويات منخفضة من عث الـ Varroa وخنافس الخلية.",
+    'healthy': "لا توجد علامات مرضية مرئية؛ الخلية تبدو سليمة.",
+    'hive being robbed': "تم اكتشاف علامات نهب، مثل زيادة العدوانية أو وجود نحل ميت.",
+    'missing queen': "هناك دلائل على فقدان الملكة، مثل غياب البيض أو خلايا الملكة."
 }
 
 FALLBACK_RESPONSES = {
     'Varroa, Small Hive Beetles': {
-        'treatment': "- Oxalic acid or amitraz treatment.\n- Monitor mite and beetle counts.\n- Rotate treatments.",
-        'management': "- Check pest levels monthly.\n- Use sticky boards."
+        'treatment': "- علاج بحمض الأكساليك أو الأميتراز.\n- مراقبة أعداد العث والخنافس.\n- تدوير العلاجات.",
+        'management': "- فحص مستويات الآفات شهريًا.\n- استخدام لوحات لزجة."
     },
     'ant problems': {
-        'treatment': "- Use ant barriers or bait traps.\n- Reduce hive entrances.\n- Remove attractants.",
-        'management': "- Monitor ant activity weekly.\n- Keep hive area clean."
+        'treatment': "- استخدام حواجز النمل أو مصائد الطعم.\n- تقليل فتحات الخلية.\n- إزالة المغريات.",
+        'management': "- مراقبة نشاط النمل أسبوعيًا.\n- الحفاظ على نظافة منطقة الخلية."
     },
     'few varroa, hive beetles': {
-        'treatment': "- Consider light treatment (e.g., thymol).\n- Use beetle traps.\n- Monitor levels.",
-        'management': "- Regular hive inspections.\n- Maintain hive hygiene."
+        'treatment': "- علاج خفيف (مثل الثيمول).\n- استخدام مصائد الخنافس.\n- مراقبة المستويات.",
+        'management': "- فحوصات دورية للخلية.\n- الحفاظ على نظافة الخلية."
     },
     'healthy': {
-        'care': "- Provide balanced nutrition.\n- Maintain clean hives.\n- Monitor queen health.",
-        'next steps': "- Regular hive inspections.\n- Ensure strong colony."
+        'care': "- توفير تغذية متوازنة.\n- الحفاظ على نظافة الخلايا.\n- مراقبة صحة الملكة.",
+        'next steps': "- فحوصات دورية للخلية.\n- ضمان قوة المستعمرة."
     },
     'hive being robbed': {
-        'management': "- Reduce hive entrances.\n- Move weaker hives.\n- Provide supplemental feeding.",
-        'treatment': "- Install robber screens.\n- Monitor for aggression."
+        'management': "- تقليل فتحات الخلية.\n- نقل الخلايا الضعيفة.\n- توفير تغذية إضافية.",
+        'treatment': "- تركيب شاشات مضادة للنهب.\n- مراقبة العدوانية."
     },
     'missing queen': {
-        'treatment': "- Introduce a new queen.\n- Check for queen cells.\n- Unite with a queenright colony.",
-        'management': "- Monitor brood patterns.\n- Ensure colony stability."
+        'treatment': "- إدخال ملكة جديدة.\n- التحقق من خلايا الملكة.\n- دمج مع مستعمرة لها ملكة.",
+        'management': "- مراقبة أنماط البيض.\n- ضمان استقرار المستعمرة."
     }
 }
 
-# ------------------- LOAD BEE MODEL (SINGLE INPUT ONLY) -------------------
+# ------------------- LOAD BEE MODEL (مع إجبار إعادة التحميل) -------------------
 @st.cache_resource
-def load_bee_model():
-    model_path = 'bee_224_model.h5'
-    if not os.path.exists(model_path):
+def load_bee_model(_model_path="bee_224_model.h5"):
+    if not os.path.exists(_model_path):
         st.error("ملف النموذج مفقود: bee_224_model.h5")
         st.stop()
 
     try:
-        # إجبار إعادة تحميل النموذج (يتجاوز الـ cache القديم)
-        model = tf.keras.models.load_model(model_path, compile=False)
-        
+        model = tf.keras.models.load_model(_model_path, compile=False)
+
         # تحقق من المدخل
         if model.input_shape != (None, 224, 224, 3):
-            st.error(f"حجم المدخل غير صحيح: {model.input_shape}")
+            st.error(f"خطأ: حجم المدخل {model.input_shape}، مطلوب (224,224,3)")
             st.stop()
 
         st.success("تم تحميل نموذج النحل بنجاح")
         return model
 
     except Exception as e:
-        st.error(f"فشل التحميل: {e}")
+        st.error(f"فشل تحميل النموذج: {e}")
         st.stop()
+
 # ------------------- MAIZE / HONEY MODE -------------------
 if mode in ["Maize", "Honey"]:
     has_classification = False
@@ -132,9 +136,9 @@ if mode in ["Maize", "Honey"]:
             reg_model = joblib.load('us_maize_yield_regressor.pkl')
             preprocessor = joblib.load('preprocessor.pkl')
             historical_df = pd.read_csv('processed_us_maize_data.csv')
-            st.success("Maize models loaded.")
+            st.success("تم تحميل نماذج الذرة")
         except Exception as e:
-            st.error(f"Maize load error: {e}")
+            st.error(f"خطأ في تحميل الذرة: {e}")
             st.stop()
 
         try:
@@ -142,9 +146,9 @@ if mode in ["Maize", "Honey"]:
             label_encoder = joblib.load('label_encoder.pkl')
             if len(preprocessor.get_feature_names_out()) == clf_model.n_features_in_:
                 has_classification = True
-                st.success("Maize classifier ready.")
+                st.success("مُصنّف الذرة جاهز")
         except:
-            st.warning("Maize classifier unavailable.")
+            st.warning("مُصنّف الذرة غير متوفر")
 
     else:  # Honey
         try:
@@ -154,34 +158,34 @@ if mode in ["Maize", "Honey"]:
             label_encoder = joblib.load('honey_label_encoder2.pkl')
             historical_df = pd.read_csv('merged_honey_weather.csv')
             has_classification = True
-            st.success("Honey models loaded.")
+            st.success("تم تحميل نماذج العسل")
         except Exception as e:
-            st.error(f"Honey load error: {e}")
+            st.error(f"خطأ في تحميل العسل: {e}")
             st.stop()
 
-    st.title(f"{mode} Yield Prediction")
+    st.title(f"تنبؤ إنتاجية {mode}")
     if mode == "Maize":
-        country = st.selectbox("Country", ["US"])
-        crop_type = st.selectbox("Crop Type", ["Maize"])
-        season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
-        year = st.number_input("Year", 2000, 2050, 2025)
-        area = st.number_input("Area (ha)", 0.0, value=100.0)
-        rainfall = st.number_input("Rainfall (mm)", 0.0, value=500.0)
-        temp = st.number_input("Temperature (°C)", 0.0, value=20.0)
-        tmin = st.number_input("Min Temp (°C)", 0.0, value=15.0)
-        tmax = st.number_input("Max Temp (°C)", 0.0, value=25.0)
-        rad = st.number_input("Solar Radiation (MJ/m²)", 0.0, value=15.0)
-        et0 = st.number_input("Evapotranspiration (mm)", 0.0, value=5.0)
-        cwb = st.number_input("Climatic Water Balance (mm)", -1000.0, value=0.0)
+        country = st.selectbox("البلد", ["US"])
+        crop_type = st.selectbox("نوع المحصول", ["Maize"])
+        season = st.selectbox("الموسم", ["Spring", "Summer", "Fall", "Winter"])
+        year = st.number_input("السنة", 2000, 2050, 2025)
+        area = st.number_input("المساحة (هكتار)", 0.0, value=100.0)
+        rainfall = st.number_input("الأمطار (مم)", 0.0, value=500.0)
+        temp = st.number_input("درجة الحرارة (°C)", 0.0, value=20.0)
+        tmin = st.number_input("أدنى درجة (°C)", 0.0, value=15.0)
+        tmax = st.number_input("أعلى درجة (°C)", 0.0, value=25.0)
+        rad = st.number_input("الإشعاع الشمسي (MJ/m²)", 0.0, value=15.0)
+        et0 = st.number_input("التبخر (مم)", 0.0, value=5.0)
+        cwb = st.number_input("توازن الماء (مم)", -1000.0, value=0.0)
     else:
-        state = st.selectbox("State", historical_df['state'].unique())
-        season = st.selectbox("Season", ["Spring", "Summer", "Fall", "Winter"])
-        year = st.number_input("Year", 1995, 2021, 2020)
-        colonies_number = st.number_input("Number of Colonies", 0, value=50000)
-        avg_temp = st.number_input("Average Temperature (°C)", 0.0, value=15.0)
-        total_rainfall = st.number_input("Total Rainfall (mm)", 0.0, value=500.0)
+        state = st.selectbox("الولاية", historical_df['state'].unique())
+        season = st.selectbox("الموسم", ["Spring", "Summer", "Fall", "Winter"])
+        year = st.number_input("السنة", 1995, 2021, 2020)
+        colonies_number = st.number_input("عدد المستعمرات", 0, value=50000)
+        avg_temp = st.number_input("متوسط درجة الحرارة (°C)", 0.0, value=15.0)
+        total_rainfall = st.number_input("إجمالي الأمطار (مم)", 0.0, value=500.0)
 
-    if st.button("Predict Yield"):
+    if st.button("احسب الإنتاجية"):
         try:
             if mode == "Maize":
                 input_data = pd.DataFrame({
@@ -198,58 +202,54 @@ if mode in ["Maize", "Honey"]:
 
             X = preprocessor.transform(input_data)
             pred = reg_model.predict(X)[0]
-            unit = 't/ha' if mode == 'Maize' else 'lbs/colony'
-            st.success(f"**Predicted Yield**: {pred:.2f} {unit}")
+            unit = 'طن/هكتار' if mode == 'Maize' else 'رطل/مستعمرة'
+            st.success(f"**الإنتاجية المتوقعة**: {pred:.2f} {unit}")
 
             total = pred * area if mode == "Maize" else pred * colonies_number / 1000
-            st.success(f"**Total {'Crop' if mode == 'Maize' else 'Honey'}**: {total:.2f} tons")
+            st.success(f"**الإجمالي**: {total:.2f} طن")
 
             if has_classification:
                 cat = label_encoder.inverse_transform(clf_model.predict(X))[0]
                 color = "#ccffcc" if cat == 'High' else "#ffcccc" if cat == 'Low' else "#fff3cd"
                 border = "#44ff44" if cat == 'High' else "#ff4444" if cat == 'Low' else "#ffc107"
                 st.markdown(f'<div style="background-color:{color}; padding:10px; border-radius:5px; border-left:5px solid {border};">'
-                            f'<strong>Yield Category: {cat}</strong></div>', unsafe_allow_html=True)
+                            f'<strong>فئة الإنتاجية: {cat}</strong></div>', unsafe_allow_html=True)
 
             y_col = 'yield' if mode == 'Maize' else 'yield_per_colony'
             hist = historical_df.groupby('year')[y_col].mean().reset_index()
-            fig1 = px.line(hist, x='year', y=y_col, title=f"Historical {mode} Yield")
-            fig1.add_scatter(x=[year], y=[pred], mode='markers', name='Predicted', marker=dict(color='red', size=12))
+            fig1 = px.line(hist, x='year', y=y_col, title=f"الاتجاه التاريخي لإنتاجية {mode}")
+            fig1.add_scatter(x=[year], y=[pred], mode='markers', name='المتوقع', marker=dict(color='red', size=12))
             st.plotly_chart(fig1, use_container_width=True)
 
-            mean_y = historical_df[y_col].mean()
-            comp = pd.DataFrame({'Type': ['Historical Avg', 'Predicted'], 'Yield': [mean_y, pred]})
-            st.plotly_chart(px.bar(comp, x='Type', y='Yield', color='Type'), use_container_width=True)
-
         except Exception as e:
-            st.error(f"Prediction failed: {e}")
+            st.error(f"فشل الحساب: {e}")
 
 # ------------------- BEE DISEASE MODE -------------------
 else:
-    st.title("Bee Hive Disease Diagnosis")
-    st.write("Upload a hive image to detect diseases and get management advice.")
+    st.title("تشخيص أمراض خلية النحل")
+    st.write("ارفع صورة الخلية للكشف عن الأمراض وتلقي نصائح العلاج.")
 
     bee_model = load_bee_model()
-    uploaded_file = st.file_uploader("Upload Hive Image", type=['png', 'jpg', 'jpeg'])
+    uploaded_file = st.file_uploader("ارفع صورة الخلية", type=['png', 'jpg', 'jpeg'])
 
-    if uploaded_file and st.button("Analyze Hive"):
+    if uploaded_file and st.button("تحليل الخلية"):
         try:
             img = Image.open(uploaded_file).convert('RGB')
-            st.image(img, caption="Uploaded Image", use_column_width=True)
+            st.image(img, caption="الصورة المرفوعة", use_column_width=True)
 
-            # Preprocess
+            # معالجة الصورة
             img_resized = img.resize(BEE_METADATA['image_size'])
             img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
             img_array = img_array / 255.0
-            img_array = np.expand_dims(img_array, axis=0)  # (1, 224, 224, 3)
+            img_array = np.expand_dims(img_array, axis=0)
 
-            # Predict
+            # التنبؤ
             preds = bee_model.predict(img_array, verbose=0)[0]
             idx = np.argmax(preds)
             confidence = float(preds[idx])
             diagnosis = BEE_METADATA['class_names'][idx]
 
-            # --- Confidence Alerts ---
+            # تنبيهات الثقة
             if confidence >= 0.85:
                 st.success(f"موثوق: {diagnosis} ({confidence*100:.1f}%)")
             elif confidence >= 0.70:
@@ -257,28 +257,28 @@ else:
             else:
                 st.error(f"ثقة منخفضة: {diagnosis} ({confidence*100:.1f}%). جرب صورة أوضح.")
 
-            # --- Explanation & Advice ---
-            st.write("**Explanation:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "غير معروف"))
+            # الشرح والنصائح
+            st.write("**الشرح:**", DIAGNOSIS_EXPLANATIONS.get(diagnosis, "غير معروف"))
 
-            st.subheader("Recommended Actions")
+            st.subheader("الإجراءات الموصى بها")
             for key, text in FALLBACK_RESPONSES.get(diagnosis, {}).items():
                 st.write(f"**{key.capitalize()}**:")
                 st.write(text.replace('\n', '<br>'), unsafe_allow_html=True)
 
-            # --- Confidence Chart ---
-            conf_df = pd.DataFrame({'Condition': BEE_METADATA['class_names'], 'Confidence': preds})
-            fig = px.bar(conf_df, x='Condition', y='Confidence', range_y=[0, 1], title="Diagnosis Confidence")
+            # رسم بياني
+            conf_df = pd.DataFrame({'الحالة': BEE_METADATA['class_names'], 'الثقة': preds})
+            fig = px.bar(conf_df, x='الحالة', y='الثقة', range_y=[0, 1], title="مستوى الثقة في التشخيص")
             st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
-            st.error(f"Analysis failed: {e}")
+            st.error(f"فشل التحليل: {e}")
 
 # ------------------- SIDEBAR -------------------
 with st.sidebar:
     st.header("AgriBee AI")
-    st.write("**Features:**")
-    st.write("- Maize & Honey Yield Prediction")
-    st.write("- Bee Hive Disease Diagnosis")
-    st.write("**Models:** XGBoost + MobileNetV2")
-    st.write("**Data:** USDA, Weather, 5k+ Hive Images")
-    st.write("Built with **Streamlit**")
+    st.write("**الميزات:**")
+    st.write("- تنبؤ إنتاجية الذرة والعسل")
+    st.write("- تشخيص أمراض خلية النحل")
+    st.write("**النماذج:** XGBoost + MobileNetV2")
+    st.write("**البيانات:** USDA، الطقس، 5000+ صورة خلية")
+    st.write("مبرمج بـ **Streamlit**")
