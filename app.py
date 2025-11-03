@@ -103,30 +103,26 @@ FALLBACK_RESPONSES = {
 # ------------------- LOAD BEE MODEL (SINGLE INPUT ONLY) -------------------
 @st.cache_resource
 def load_bee_model():
-    model_path = 'bee_224_model2.h5'
+    model_path = 'bee_224_model.h5'
     if not os.path.exists(model_path):
-        st.error("Bee model not found: 'bee_224_model.h5' missing.")
+        st.error("ملف النموذج مفقود: bee_224_model.h5")
         st.stop()
 
     try:
+        # إجبار إعادة تحميل النموذج (يتجاوز الـ cache القديم)
         model = tf.keras.models.load_model(model_path, compile=False)
         
-        # --- تأكد من أن النموذج له مدخل واحد فقط ---
-        if isinstance(model.inputs, list):
-            if len(model.inputs) != 1:
-                st.error(f"Model has {len(model.inputs)} inputs. Expected 1.")
-                st.stop()
-        else:
-            if model.input_shape != (None, 224, 224, 3):
-                st.warning(f"Unexpected input shape: {model.input_shape}")
+        # تحقق من المدخل
+        if model.input_shape != (None, 224, 224, 3):
+            st.error(f"حجم المدخل غير صحيح: {model.input_shape}")
+            st.stop()
 
-        st.success("Bee model loaded successfully (224×224, single input)")
+        st.success("تم تحميل نموذج النحل بنجاح")
         return model
 
     except Exception as e:
-        st.error(f"Failed to load bee model: {e}")
+        st.error(f"فشل التحميل: {e}")
         st.stop()
-
 # ------------------- MAIZE / HONEY MODE -------------------
 if mode in ["Maize", "Honey"]:
     has_classification = False
