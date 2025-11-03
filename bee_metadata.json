@@ -1,0 +1,14 @@
+{
+  "class_names": [
+    "Varroa, Small Hive Beetles",
+    "ant problems",
+    "few varroa, hive beetles",
+    "healthy",
+    "hive being robbed",
+    "missing queen"
+  ],
+  "image_size": [
+    224,
+    224
+  ]
+}
