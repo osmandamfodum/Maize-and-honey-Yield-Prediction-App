@@ -11,7 +11,7 @@ import tensorflow as tf
 from PIL import Image
 import os
 import json
-
+st.cache_resource.clear()
 # ------------------- Suppress TF warnings -------------------
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
