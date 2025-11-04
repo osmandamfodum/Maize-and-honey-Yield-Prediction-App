@@ -107,7 +107,7 @@ FALLBACK_RESPONSES = {
 
 # ------------------- LOAD BEE MODEL (مع إجبار إعادة التحميل) -------------------
 @st.cache_resource
-def load_bee_model(_model_path="bee_224_model.h5"):
+def load_bee_model(_model_path="bee_224_model2.h5"):
     if not os.path.exists(_model_path):
         st.error("ملف النموذج مفقود: bee_224_model.h5")
         st.stop()
