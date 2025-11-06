@@ -27,7 +27,7 @@ st.markdown("""
 # ------------------- Header Image -------------------
 st.markdown('<div class="image-container">', unsafe_allow_html=True)
 if os.path.exists("neu.jpg"):
-  st.image("neu.jpg", use_container_width=True)  
+  st.image("neu.jpg", use_container_width=True)
 else:
     st.markdown("### AgriBee AI")
 st.markdown('</div>', unsafe_allow_html=True)
